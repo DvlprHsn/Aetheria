@@ -1,3 +1,4 @@
+#version 120
 /*
  * gbuffers_terrain.vsh
  * Main geometry pass for blocks

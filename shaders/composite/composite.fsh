@@ -1,3 +1,4 @@
+#version 120
 /* composite.fsh - Post-processing pass */
 
 uniform sampler2D gcolor;

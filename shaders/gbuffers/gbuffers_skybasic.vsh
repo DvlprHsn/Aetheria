@@ -1,3 +1,4 @@
+#version 120
 /* gbuffers_skybasic.vsh */
 
 varying vec3 viewPos;

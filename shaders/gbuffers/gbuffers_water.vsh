@@ -1,3 +1,4 @@
+#version 120
 /* gbuffers_water.vsh */
 uniform float frameTimeCounter;
 
