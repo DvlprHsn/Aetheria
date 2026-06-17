@@ -38,17 +38,17 @@ void main() {
     // In Optifine, sunPosition points to the sun. During night, sunElevation < 0.
     // We'll flip the light direction for the moon.
     vec3 lightDir = sunElevation > 0.0 ? sunDir : -sunDir;
-    float timeBlend = clamp(abs(sunElevation) * 2.0, 0.0, 1.0); // 0 at dawn/dusk, 1 at noon/midnight
+    float timeBlend = clamp(abs(sunElevation) * 2.5, 0.0, 1.0); // 0 at dawn/dusk, 1 at noon/midnight
     
     // Day vs Night intensities
     float isDay = step(0.0, sunElevation);
     
-    // Base colors based on time
-    vec3 daySunColor = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.9), timeBlend);
-    vec3 dayAmbient = mix(vec3(0.3, 0.2, 0.2), vec3(0.2, 0.4, 0.6), timeBlend);
+    // Base colors based on time (Brighter!)
+    vec3 daySunColor = mix(vec3(1.2, 0.7, 0.4), vec3(1.3, 1.25, 1.2), timeBlend);
+    vec3 dayAmbient = mix(vec3(0.5, 0.4, 0.4), vec3(0.4, 0.6, 0.8), timeBlend);
     
-    vec3 nightMoonColor = mix(vec3(0.1, 0.2, 0.4), vec3(0.2, 0.3, 0.5), timeBlend);
-    vec3 nightAmbient = vec3(0.02, 0.04, 0.08); // Very dark nights
+    vec3 nightMoonColor = mix(vec3(0.1, 0.2, 0.4), vec3(0.3, 0.4, 0.6), timeBlend);
+    vec3 nightAmbient = vec3(0.05, 0.1, 0.15); // Better night visibility
     
     // Current sun/moon and ambient colors
     vec3 currentLightColor = mix(nightMoonColor, daySunColor, isDay);

@@ -37,15 +37,27 @@ float calculateSpecular(vec3 viewDir, vec3 lightDir, vec3 normal, float shinines
     return pow(NdotH, shininess);
 }
 
-// Compute shadow using shadow2D
+// Compute shadow using shadow2D filtering (PCF)
 float getShadow(sampler2D shadowtex, vec3 shadowCoord) {
     if (shadowCoord.z > 1.0 || shadowCoord.x < 0.0 || shadowCoord.x > 1.0 || shadowCoord.y < 0.0 || shadowCoord.y > 1.0) {
         return 1.0;
     }
-    float shadowDepth = texture2D(shadowtex, shadowCoord.xy).r;
-    float currentDepth = shadowCoord.z;
-    // bias to prevent acne
-    return currentDepth > shadowDepth + 0.002 ? 0.0 : 1.0;
+    
+    // Bias to prevent acne
+    float bias = 0.001;
+    float currentDepth = shadowCoord.z - bias;
+    
+    // 3x3 PCF sampling (with shadowMapResolution = 2048)
+    float texelSize = 1.0 / 2048.0;
+    float shadow = 0.0;
+    
+    for(int x = -1; x <= 1; x++) {
+        for(int y = -1; y <= 1; y++) {
+            float pcfDepth = texture2D(shadowtex, shadowCoord.xy + vec2(x, y) * texelSize).r;
+            shadow += currentDepth > pcfDepth ? 0.0 : 1.0;
+        }
+    }
+    return shadow / 9.0;
 }
 
 vec3 getShadowCoord(vec3 viewPos, mat4 gbufferModelViewInverse, mat4 shadowModelView, mat4 shadowProjection) {

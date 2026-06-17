@@ -24,10 +24,10 @@ void main() {
     
     float sunElevation = dot(sunDir, upDir);
     float isDay = step(0.0, sunElevation);
-    float timeBlend = clamp(abs(sunElevation) * 2.0, 0.0, 1.0);
+    float timeBlend = clamp(abs(sunElevation) * 2.5, 0.0, 1.0);
     
-    vec3 daySunColor = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.9), timeBlend);
-    vec3 nightAmbient = vec3(0.02, 0.04, 0.08);
+    vec3 daySunColor = mix(vec3(1.2, 0.7, 0.4), vec3(1.3, 1.25, 1.2), timeBlend);
+    vec3 nightAmbient = vec3(0.05, 0.1, 0.15);
     
     vec3 currentSunColor = mix(nightAmbient, daySunColor, isDay);
     

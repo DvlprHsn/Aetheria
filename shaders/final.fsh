@@ -7,19 +7,19 @@ varying vec2 texcoord;
 
 // ACES tonemapping
 vec3 ACESFilm(vec3 x) {
-    float a = 2.51f;
-    float b = 0.03f;
-    float c = 2.43f;
-    float d = 0.59f;
-    float e = 0.14f;
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
     return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
 }
 
 void main() {
     vec4 color = texture2D(gcolor, texcoord);
     
-    // Slight exposure bump
-    color.rgb *= 1.2;
+    // Noticeable exposure bump
+    color.rgb *= 2.0;
     
     // Tonemapping
     color.rgb = ACESFilm(color.rgb);
