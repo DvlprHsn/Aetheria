@@ -1,6 +1,5 @@
-/* gbuffers_skybasic.vsh */
+/* shadow.vsh - Shadow map generation */
 
 void main() {
     gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
-    gl_FogFragCoord = gl_Position.z;
 }
