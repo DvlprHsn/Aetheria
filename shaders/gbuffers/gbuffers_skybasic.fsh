@@ -1,4 +1,3 @@
-#version 120
 /* gbuffers_skybasic.fsh */
 uniform vec3 sunPosition;
 uniform vec3 upPosition;

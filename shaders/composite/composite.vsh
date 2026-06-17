@@ -1,4 +1,3 @@
-#version 120
 /* composite.vsh - Post-processing pass */
 
 varying vec2 texcoord;

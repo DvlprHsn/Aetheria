@@ -1,4 +1,3 @@
-#version 120
 /*
  * gbuffers_terrain.fsh
  * Fragment shader for solid blocks

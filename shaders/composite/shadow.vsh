@@ -1,4 +1,3 @@
-#version 120
 /* shadow.vsh */
 
 varying vec2 texcoord;

@@ -1,4 +1,3 @@
-#version 120
 /* gbuffers_entities.fsh */
 uniform sampler2D texture;
 uniform sampler2D lightmap;

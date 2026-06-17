@@ -1,4 +1,3 @@
-#version 120
 /* shadow.fsh */
 uniform sampler2D texture;
 

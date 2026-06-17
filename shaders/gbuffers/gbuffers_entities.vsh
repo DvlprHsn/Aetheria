@@ -1,4 +1,3 @@
-#version 120
 /* gbuffers_entities.vsh */
 
 varying vec2 texcoord;
