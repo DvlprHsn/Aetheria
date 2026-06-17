@@ -34,12 +34,19 @@ float noise(vec3 x) {
 float fbm(vec3 p) {
     float f = 0.0;
     float amp = 0.5;
-    for(int i = 0; i < 4; i++) {
-        f += amp * noise(p);
-        p *= 2.02;
+    float freq = 1.0;
+    for(int i = 0; i < 5; i++) {
+        f += amp * noise(p * freq);
+        freq *= 2.02;
         amp *= 0.5;
     }
     return f;
+}
+
+// Henyey-Greenstein phase function for realistic cloud scattering
+float phaseHenyeyGreenstein(float cosTheta, float g) {
+    float g2 = g * g;
+    return (1.0 - g2) / (4.0 * 3.14159 * pow(1.0 + g2 - 2.0 * g * cosTheta, 1.5));
 }
 
 // Compute view directory from screen coordinates
@@ -52,45 +59,57 @@ vec3 getViewDir(vec2 coord) {
 }
 
 vec3 getSkyColor(vec3 rayDir, vec3 sunDir) {
-    vec3 skyBlue = vec3(0.15, 0.35, 0.65);
-    vec3 horizonColor = vec3(0.5, 0.7, 0.85); // bright near horizon
-    vec3 sunsetColor = vec3(0.9, 0.35, 0.1);
+    vec3 skyBlue = vec3(0.12, 0.3, 0.7);
+    vec3 horizonColor = vec3(0.6, 0.75, 0.9); // bright near horizon
+    vec3 sunsetColor = vec3(1.0, 0.3, 0.05);
     
     float sunHeight = sunDir.y;
     
-    // Elevation mix
-    float elevation = max(0.0, rayDir.y);
-    float horizonMix = pow(1.0 - elevation, 5.0);
-    
     // Day/Night cycle base colors
     float dayFactor = smoothstep(-0.1, 0.1, sunHeight);
-    skyBlue = mix(vec3(0.01, 0.02, 0.05), skyBlue, dayFactor);
-    horizonColor = mix(vec3(0.02, 0.05, 0.1), horizonColor, dayFactor);
+    vec3 nightBlue = vec3(0.01, 0.02, 0.05);
+    vec3 nightHorizon = vec3(0.02, 0.05, 0.12);
+    
+    skyBlue = mix(nightBlue, skyBlue, dayFactor);
+    horizonColor = mix(nightHorizon, horizonColor, dayFactor);
+    
+    // Elevation mix
+    float elevation = max(0.0, rayDir.y);
+    float horizonMix = pow(1.0 - elevation, 4.0);
     
     vec3 baseCol = mix(skyBlue, horizonColor, horizonMix);
     
     // Stars at night
     if (dayFactor < 1.0 && rayDir.y > 0.0) {
-        float starVal = hash(rayDir * 100.0);
-        float starIntensity = pow(starVal, 150.0) * (1.0 - dayFactor);
+        float starVal = hash(rayDir * 200.0);
+        float starIntensity = pow(starVal, 250.0) * (1.0 - dayFactor);
         baseCol += vec3(starIntensity);
     }
     
-    // Sunset contribution
-    float sunMix = max(0.0, 1.0 - abs(sunHeight) * 3.0);
-    vec3 sunHoriz = vec3(sunDir.x, 0.0001, sunDir.z); // Epsilon to prevent NaN when sun is at zenith
+    // Sunset global scatter
+    float sunMix = max(0.0, 1.0 - abs(sunHeight) * 3.5);
+    vec3 sunHoriz = vec3(sunDir.x, 0.0001, sunDir.z); // Epsilon to prevent NaN
     float toSun = max(0.0, dot(rayDir, normalize(sunHoriz)));
-    vec3 sunsetGlow = sunsetColor * pow(toSun, 3.0) * horizonMix * sunMix;
+    vec3 sunsetGlow = sunsetColor * pow(toSun, 2.5) * horizonMix * sunMix * 1.5;
     
     baseCol += sunsetGlow;
     
-    // Sun Disc
-    float sunDisc = smoothstep(0.9992, 0.9995, dot(rayDir, sunDir));
-    baseCol = mix(baseCol, vec3(1.5, 1.2, 0.9), sunDisc);
+    // Sun and Moon Discs with realistic glows
+    float cosThetaSun = dot(rayDir, sunDir);
+    float sunDisc = smoothstep(0.9997, 0.9999, cosThetaSun);
+    float sunGlow = pow(max(0.0, cosThetaSun), 80.0) * dayFactor;
     
-    // Moon Disc
-    float moonDisc = smoothstep(0.9996, 0.9998, dot(rayDir, -sunDir));
-    baseCol = mix(baseCol, vec3(0.6, 0.7, 0.9), moonDisc);
+    float cosThetaMoon = dot(rayDir, -sunDir);
+    float moonDisc = smoothstep(0.9996, 0.9998, cosThetaMoon);
+    float moonGlow = pow(max(0.0, cosThetaMoon), 50.0) * (1.0 - dayFactor);
+    
+    // Add sun
+    baseCol += vec3(sunGlow * 0.5) * vec3(1.0, 0.9, 0.7);
+    baseCol = mix(baseCol, vec3(2.0, 1.8, 1.4), sunDisc * dayFactor);
+    
+    // Add moon
+    baseCol += vec3(moonGlow * 0.2) * vec3(0.5, 0.6, 0.8);
+    baseCol = mix(baseCol, vec3(0.8, 0.9, 1.1), moonDisc * (1.0 - dayFactor));
     
     return baseCol;
 }
@@ -102,10 +121,11 @@ float intersectPlane(vec3 rayOrigin, vec3 rayDir, float height) {
     return t;
 }
 
-// Raymarching volumetric "foamy" clouds
+// Raymarching volumetric 3D clouds
 vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
-    float cloudMinHeight = 120.0;
-    float cloudMaxHeight = 160.0;
+    float cloudMinHeight = 150.0;
+    float cloudMaxHeight = 250.0;
+    float cloudThickness = cloudMaxHeight - cloudMinHeight;
     
     // Intersect with cloud layer
     float tMin = intersectPlane(rayOrigin, rayDir, cloudMinHeight);
@@ -117,18 +137,16 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     } else {
         if (tMin < 0.0) return vec4(0.0);
         if (tMax < 0.0) tMax = 0.0;
-        // Swap for looking down
         float tmp = tMin; tMin = tMax; tMax = tmp;
     }
     
     if (tMin > maxDist) return vec4(0.0);
     tMax = min(tMax, maxDist);
-    tMax = min(tMax, tMin + 2000.0); // Limit maximum draw distance for clouds to prevent smearing
+    tMax = min(tMax, tMin + 2500.0); // Limit maximum draw distance for clouds
     if (tMax < tMin) return vec4(0.0);
     
-    // Raymarch bounds
     float t = tMin;
-    float stepSize = (tMax - tMin) / 32.0; // 32 steps for performance
+    float stepSize = (tMax - tMin) / 48.0; // 48 steps for better 3D volume
     
     // Dithering to hide banding
     vec2 coord = gl_FragCoord.xy;
@@ -137,46 +155,89 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     
     vec4 sum = vec4(0.0);
     
-    for(int i = 0; i < 32; i++) {
+    vec3 lightDir = sunDir.y > 0.0 ? sunDir : -sunDir;
+    float dayFactor = smoothstep(-0.1, 0.1, sunDir.y);
+    float cosTheta = dot(rayDir, lightDir);
+    
+    // Dual Henyey-Greenstein phase for forward and backward scattering
+    float phase = mix(phaseHenyeyGreenstein(cosTheta, 0.6), phaseHenyeyGreenstein(cosTheta, -0.3), 0.3);
+    
+    for(int i = 0; i < 48; i++) {
         if (t >= tMax || sum.a >= 0.99) break;
         
         vec3 p = rayOrigin + rayDir * t;
         
         // Foamy noise sampling
-        vec3 samplePos = p * 0.015;
-        samplePos.x += frameTimeCounter * 0.1; // Wind movement
+        vec3 samplePos = p * 0.008; // scale
+        samplePos.x += frameTimeCounter * 0.05; // wind
         
+        // Base shape
         float n = fbm(samplePos);
-        float verticalGradient = 1.0 - abs((p.y - 140.0) / 20.0); // fade near edges
+        
+        // Height gradient (rounded bottoms, wispy tops)
+        float heightFrac = (p.y - cloudMinHeight) / cloudThickness;
+        float verticalGradient = smoothstep(0.0, 0.2, heightFrac) * smoothstep(1.0, 0.4, heightFrac);
         
         float density = n * verticalGradient - 0.35; // Cloud threshold
         
         if (density > 0.0) {
-            density *= 3.0; // Scale density
+            density *= 4.0; // Scale density
             
-            // Simple lighting: sunlight or moonlight direction sample
-            vec3 lightDir = sunDir.y > 0.0 ? sunDir : -sunDir;
-            float densSun = fbm(samplePos + lightDir * 0.05) - 0.35;
-            float light = exp(-densSun * 2.0); // Shadowing inside clouds
+            // Lighting sample inside cloud
+            float densSun = fbm(samplePos + lightDir * 0.02) - 0.35;
+            float lightTransmittance = exp(-max(0.0, densSun) * 3.0); // self-shadowing
             
-            float dayFactor = smoothstep(-0.1, 0.1, sunDir.y);
-            vec3 dayCloudColor = mix(vec3(0.4, 0.45, 0.55), vec3(1.0, 0.95, 0.9), light);
-            vec3 nightCloudColor = mix(vec3(0.05, 0.05, 0.08), vec3(0.2, 0.25, 0.35), light);
-            vec3 cloudColor = mix(nightCloudColor, dayCloudColor, dayFactor);
+            // Powder effect (darker edges)
+            float powder = 1.0 - exp(-density * 2.0);
             
-            // Highlight near sun/moon
-            float phase = max(0.0, dot(rayDir, lightDir));
-            vec3 highlightColor = mix(vec3(0.3, 0.35, 0.5), vec3(1.0, 0.9, 0.7), dayFactor);
-            cloudColor += highlightColor * pow(phase, 4.0) * light;
+            // Ambient lighting
+            vec3 dayAmbient = mix(vec3(0.5, 0.6, 0.7), vec3(0.8, 0.9, 1.0), heightFrac);
+            vec3 nightAmbient = mix(vec3(0.05, 0.05, 0.08), vec3(0.1, 0.15, 0.2), heightFrac);
+            vec3 ambient = mix(nightAmbient, dayAmbient, dayFactor);
+            
+            // Direct lighting
+            vec3 dayDirect = vec3(1.2, 1.1, 0.9);
+            vec3 nightDirect = vec3(0.1, 0.15, 0.2);
+            vec3 directColor = mix(nightDirect, dayDirect, dayFactor);
+            
+            // Final cloud color at this sample
+            vec3 cloudColor = ambient + directColor * lightTransmittance * powder * (1.0 + phase * 2.0);
             
             vec4 col = vec4(cloudColor * density, density);
-            sum += col * (1.0 - sum.a); // alpha blend
+            
+            // Alpha compositing
+            sum += col * (1.0 - sum.a);
         }
         
         t += stepSize;
     }
     
     return sum;
+}
+
+// Realistic volumetric fog
+vec3 applyFog(vec3 color, float dist, vec3 rayDir, vec3 sunDir, float depth) {
+    float fogDensity = 0.003;
+    
+    // Decrease fog density looking up into the sky so we can see stars/clouds
+    if (depth > 0.99999) {
+        float elevation = max(0.0, rayDir.y);
+        fogDensity *= exp(-elevation * 10.0);
+    }
+    
+    float fogFactor = 1.0 - exp(-dist * fogDensity);
+    
+    float sunHeight = sunDir.y;
+    float dayFactor = smoothstep(-0.1, 0.1, sunHeight);
+    
+    // Sample the sky color at the horizon for realistic fog coloring
+    vec3 horizonBlue = mix(vec3(0.02, 0.05, 0.12), vec3(0.6, 0.75, 0.9), dayFactor);
+    float toSun = max(0.0, dot(rayDir, normalize(vec3(sunDir.x, 0.0001, sunDir.z))));
+    vec3 sunsetGlow = vec3(1.0, 0.3, 0.05) * pow(toSun, 2.5) * max(0.0, 1.0 - abs(sunHeight) * 3.5) * 1.5;
+    
+    vec3 fogColor = horizonBlue + sunsetGlow;
+    
+    return mix(color, fogColor, fogFactor);
 }
 
 void main() {
@@ -190,14 +251,16 @@ void main() {
     // Background sky color
     vec3 skyColor = getSkyColor(rayDir, sunDir);
     
-    // Calculate world position for depth buffer to limit cloud ray distance
-    float maxDist = 10000.0;
+    // Calculate world position for depth buffer
+    float maxDist = 20000.0;
+    float hitDist = maxDist;
     if (depth < 0.99999) {
         vec4 fragPos = vec4(texcoord * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
         fragPos = gbufferProjectionInverse * fragPos;
         fragPos /= fragPos.w;
         vec4 viewPos = gbufferModelViewInverse * fragPos;
-        maxDist = length(viewPos.xyz);
+        hitDist = length(viewPos.xyz);
+        maxDist = hitDist;
     }
     
     // Render clouds
@@ -213,6 +276,9 @@ void main() {
     
     // Apply clouds over background or terrain
     finalColor = finalColor * (1.0 - clouds.a) + clouds.rgb;
+    
+    // Apply realistic fog over everything based on depth
+    finalColor = applyFog(finalColor, hitDist, rayDir, sunDir, depth);
     
     // Output
     gl_FragColor = vec4(finalColor, 1.0);
