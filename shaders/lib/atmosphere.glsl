@@ -195,9 +195,14 @@ vec4 renderHighClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir) {
     if (t < 0.0 || t > 50000.0) return vec4(0.0);
     
     vec3 p = rayOrigin + rayDir * t;
-    vec3 samplePos = p * 0.0001; // Wide scale
-    samplePos.x += frameTimeCounter * 0.005; // Noticeable drift for high clouds
-    samplePos.z += frameTimeCounter * 0.002;
+    vec3 pOffset = p;
+    pOffset.x += frameTimeCounter * 50.0;
+    pOffset.z += frameTimeCounter * 20.0;
+    
+    float voxelSize = 64.0;
+    vec3 voxelP = floor(pOffset / voxelSize) * voxelSize;
+    
+    vec3 samplePos = voxelP * 0.0001; // Wide scale
     
     // 1. Cirrus: Fibrous, hair-like
     float typeCirrus = fbm_cirrus(samplePos);
@@ -253,11 +258,12 @@ vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxD
     
     if (tMin > maxDist) return vec4(0.0);
     tMax = min(tMax, maxDist);
-    tMax = min(tMax, tMin + 20000.0);
+    tMax = min(tMax, tMin + 8000.0); // Limit horizontal ray step to 8000m for better block resolution
     if (tMax < tMin) return vec4(0.0);
     
     float t = tMin;
-    float stepSize = (tMax - tMin) / 80.0; 
+    int stepCount = 100;
+    float stepSize = (tMax - tMin) / float(stepCount); 
     
     vec2 coord = gl_FragCoord.xy;
     float dither = fract(sin(dot(coord, vec2(12.9898, 78.233))) * 43758.5453) * stepSize;
@@ -269,18 +275,22 @@ vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxD
     float cosTheta = dot(rayDir, lightDir);
     float phase = mix(phaseHenyeyGreenstein(cosTheta, 0.7), phaseHenyeyGreenstein(cosTheta, -0.4), 0.3);
     
-    for(int i = 0; i < 80; i++) {
+    for(int i = 0; i < stepCount; i++) {
         if (t >= tMax || sum.a >= 0.99) break;
         
         vec3 p = rayOrigin + rayDir * t;
-        float heightFrac = clamp((p.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
         
         vec3 windOffset = vec3(frameTimeCounter * 0.005, 0.0, frameTimeCounter * 0.002);
         vec3 pOffset = p;
         pOffset.x += windOffset.x * 2000.0;
         pOffset.z += windOffset.z * 2000.0;
         
-        vec3 samplePos = pOffset * 0.002;
+        // Voxelize position to create blocky Minecraft-style volumetric clouds
+        float voxelSize = 64.0;
+        vec3 voxelP = floor(pOffset / voxelSize) * voxelSize;
+        float heightFrac = clamp((voxelP.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
+        
+        vec3 samplePos = voxelP * 0.002;
         float baseNoise = fbm(samplePos);
         float detailNoise = fbm(samplePos * 3.0);
         
@@ -292,7 +302,7 @@ vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxD
         float timeMod = mix(0.7, 1.3, dayFade); // More coverage during daytime
 
         // Animating clouds using frameTimeCounter
-        float cloudCoverage = fbm(pOffset * 0.0003) * timeMod;
+        float cloudCoverage = fbm(voxelP * 0.0003) * timeMod;
         
         // Mid-Level Clouds
         // 4. Altocumulus: Rounded patches
@@ -336,9 +346,10 @@ vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxD
             
             // Self shadowing
             vec3 lightStep = lightDir * mix(40.0, 15.0, wetness);
-            vec3 lP = p + lightStep;
-            float lHeightFrac = clamp((lP.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
-            float densSun = (fbm(lP * 0.002) - 0.4) * smoothstep(0.0, bottomRound, lHeightFrac);
+            vec3 lP = pOffset + lightStep;
+            vec3 voxelLP = floor(lP / voxelSize) * voxelSize;
+            float lHeightFrac = clamp((voxelLP.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
+            float densSun = (fbm(voxelLP * 0.002) - 0.4) * smoothstep(0.0, bottomRound, lHeightFrac);
             densSun = mix(max(0.0, densSun), max(0.0, densSun + 0.5), wetness); 
             
             float lightTransmittance = exp(-densSun * mix(2.0, 8.0, wetness)); 
