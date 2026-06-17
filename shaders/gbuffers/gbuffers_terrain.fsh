@@ -5,12 +5,8 @@
 
 uniform sampler2D texture;
 uniform sampler2D lightmap;
-uniform sampler2D shadowtex0;
 uniform vec3 sunPosition;
 uniform vec3 upPosition;
-uniform mat4 gbufferModelViewInverse;
-uniform mat4 shadowModelView;
-uniform mat4 shadowProjection;
 
 varying vec2 texcoord;
 varying vec2 lmcoord;
@@ -38,17 +34,17 @@ void main() {
     // In Optifine, sunPosition points to the sun. During night, sunElevation < 0.
     // We'll flip the light direction for the moon.
     vec3 lightDir = sunElevation > 0.0 ? sunDir : -sunDir;
-    float timeBlend = clamp(abs(sunElevation) * 2.5, 0.0, 1.0); // 0 at dawn/dusk, 1 at noon/midnight
+    float timeBlend = clamp(abs(sunElevation) * 2.0, 0.0, 1.0); // 0 at dawn/dusk, 1 at noon/midnight
     
     // Day vs Night intensities
     float isDay = step(0.0, sunElevation);
     
-    // Base colors based on time (Brighter!)
-    vec3 daySunColor = mix(vec3(1.2, 0.7, 0.4), vec3(1.3, 1.25, 1.2), timeBlend);
-    vec3 dayAmbient = mix(vec3(0.5, 0.4, 0.4), vec3(0.4, 0.6, 0.8), timeBlend);
+    // Base colors based on time
+    vec3 daySunColor = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.9), timeBlend);
+    vec3 dayAmbient = mix(vec3(0.3, 0.2, 0.2), vec3(0.2, 0.4, 0.6), timeBlend);
     
-    vec3 nightMoonColor = mix(vec3(0.1, 0.2, 0.4), vec3(0.3, 0.4, 0.6), timeBlend);
-    vec3 nightAmbient = vec3(0.05, 0.1, 0.15); // Better night visibility
+    vec3 nightMoonColor = mix(vec3(0.1, 0.2, 0.4), vec3(0.2, 0.3, 0.5), timeBlend);
+    vec3 nightAmbient = vec3(0.02, 0.04, 0.08); // Very dark nights
     
     // Current sun/moon and ambient colors
     vec3 currentLightColor = mix(nightMoonColor, daySunColor, isDay);
@@ -74,21 +70,14 @@ void main() {
     // Calculate simple specular
     float specular = calculateSpecular(viewDir, lightDir, normal, shininess);
     
-    // Shadows!
-    vec3 shadowCoord = getShadowCoord(viewPos, gbufferModelViewInverse, shadowModelView, shadowProjection);
-    float rawShadow = getShadow(shadowtex0, shadowCoord);
-    float shadowFactor = mix(1.0, rawShadow, skyLight * 0.9); // Mostly apply shadow outdoors
-    
     // Directional light depends on sky visibility
-    float shadowSmoothing = mix(1.0, shadowFactor, 0.8); // Softer shadows inside the lighted areas
-    vec3 directionalLight = currentLightColor * diffuse * skyLight * shadowSmoothing;
+    vec3 directionalLight = currentLightColor * diffuse * skyLight;
     
     // Specular highlight only where sunlight directly hits
-    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight * shadowFactor;
+    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight;
     
     // Final lighting = ambient + directional + torch
-    vec3 minAmbient = vec3(0.08, 0.08, 0.12);
-    vec3 finalLight = max(ambientColor * skyLight, minAmbient) + directionalLight + currentTorchLight;
+    vec3 finalLight = (ambientColor * skyLight) + directionalLight + currentTorchLight;
     
     // Apply lighting
     albedo.rgb = albedo.rgb * finalLight + specularLight;
