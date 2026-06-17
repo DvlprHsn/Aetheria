@@ -5,6 +5,12 @@
 
 uniform sampler2D texture;
 uniform sampler2D lightmap;
+uniform sampler2D shadowtex0;
+
+uniform mat4 shadowModelView;
+uniform mat4 shadowProjection;
+uniform mat4 gbufferModelViewInverse;
+
 uniform vec3 sunPosition;
 uniform vec3 upPosition;
 
@@ -30,68 +36,60 @@ void main() {
     // Calculate sun elevation (-1 to 1)
     float sunElevation = dot(sunDir, upDir);
     
-    // Determine whether we are using sun or moon as primary directional light
-    // In Optifine, sunPosition points to the sun. During night, sunElevation < 0.
-    // We'll flip the light direction for the moon.
     vec3 lightDir = sunElevation > 0.0 ? sunDir : -sunDir;
-    float timeBlend = clamp(abs(sunElevation) * 2.0, 0.0, 1.0); // 0 at dawn/dusk, 1 at noon/midnight
+    float timeBlend = clamp(abs(sunElevation) * 2.0, 0.0, 1.0);
     
-    // Day vs Night intensities
     float isDay = step(0.0, sunElevation);
     
-    // Base colors based on time
     vec3 daySunColor = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.9), timeBlend);
     vec3 dayAmbient = mix(vec3(0.3, 0.2, 0.2), vec3(0.2, 0.4, 0.6), timeBlend);
-    
     vec3 nightMoonColor = mix(vec3(0.1, 0.2, 0.4), vec3(0.2, 0.3, 0.5), timeBlend);
-    vec3 nightAmbient = vec3(0.02, 0.04, 0.08); // Very dark nights
+    vec3 nightAmbient = vec3(0.02, 0.04, 0.08);
     
-    // Current sun/moon and ambient colors
     vec3 currentLightColor = mix(nightMoonColor, daySunColor, isDay);
     vec3 ambientColor = mix(nightAmbient, dayAmbient, isDay);
     
-    // Torch lighting (block light)
-    vec3 torchColor = vec3(1.0, 0.6, 0.2); // Warm orange
-    float torchIntensity = pow(lmcoord.x, 2.0); // Non-linear falloff for realism
+    vec3 torchColor = vec3(1.0, 0.6, 0.2);
+    float torchIntensity = pow(lmcoord.x, 2.0);
     vec3 currentTorchLight = torchColor * torchIntensity * 2.5;
     
-    // Sky light strength (from lightmap, handles cave shadows!)
     float skyLight = pow(lmcoord.y, 2.0);
     
-    // Configurable material properties for terrain
-    float roughness = 0.8; // High roughness for dirt, stone, grass
-    float shininess = 16.0; // Low shininess for diffuse surfaces
-    float specularIntensity = 0.05; // Faint specular bump
+    // --- SHADOW MAPPING ---
+    float shadow = 1.0;
+    if (skyLight > 0.01) {
+        // Convert viewPos to World Space, then to Shadow Space
+        vec4 worldPos = gbufferModelViewInverse * vec4(viewPos, 1.0);
+        vec4 shadowSpacePos = shadowProjection * (shadowModelView * worldPos);
+        vec3 shadowCoord = (shadowSpacePos.xyz / shadowSpacePos.w) * 0.5 + 0.5;
+        
+        if (shadowCoord.x >= 0.0 && shadowCoord.x <= 1.0 && 
+            shadowCoord.y >= 0.0 && shadowCoord.y <= 1.0 && 
+            shadowCoord.z >= 0.0 && shadowCoord.z <= 1.0) {
+            
+            float shadowDepth = texture2D(shadowtex0, shadowCoord.xy).r;
+            float bias = 0.001 * tan(acos(clamp(dot(normal, lightDir), 0.0, 1.0)));
+            bias = clamp(bias, 0.0005, 0.015);
+            
+            if (shadowDepth < shadowCoord.z - bias) {
+                shadow = 0.0;
+            }
+        }
+    }
     
-    // Calculate Oren-Nayar diffuse
-    float diffuse = calculateOrenNayar(viewDir, lightDir, normal, roughness);
+    float diffuse = calculateOrenNayar(viewDir, lightDir, normal, 0.8) * shadow;
     diffuse = max(diffuse, 0.0);
+    float specular = calculateSpecular(viewDir, lightDir, normal, 16.0) * shadow;
     
-    // Calculate simple specular
-    float specular = calculateSpecular(viewDir, lightDir, normal, shininess);
-    
-    // Directional light depends on sky visibility
     vec3 directionalLight = currentLightColor * diffuse * skyLight;
+    vec3 specularLight = currentLightColor * specular * 0.05 * skyLight;
     
-    // Specular highlight only where sunlight directly hits
-    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight;
-    
-    // Final lighting = ambient + directional + torch
     vec3 finalLight = (ambientColor * skyLight) + directionalLight + currentTorchLight;
-    
-    // Apply lighting
     albedo.rgb = albedo.rgb * finalLight + specularLight;
     
-    // Custom Sky-based fog depending on time of day
-    vec3 fogColorDay = mix(daySunColor, vec3(0.5, 0.7, 1.0), 0.5);
-    vec3 fogColorNight = nightAmbient;
-    vec3 fogColor = mix(fogColorNight, fogColorDay, isDay);
-    
-    // Light scattering/glow around the sun setting (horizon)
-    float viewDotLight = max(dot(viewDir, lightDir), 0.0);
-    vec3 sunGlowColor = currentLightColor * pow(viewDotLight, 4.0);
-    fogColor += sunGlowColor * 0.3 * skyLight; // only if we can see the sky
-    
+    // Basic fog from distance
     float fogFactor = clamp((gl_Fog.end - gl_FogFragCoord) * gl_Fog.scale, 0.0, 1.0);
+    vec3 fogColor = mix(nightAmbient, mix(daySunColor, vec3(0.5, 0.7, 1.0), 0.5), isDay);
+    
     gl_FragColor = mix(vec4(fogColor, 1.0), albedo, fogFactor);
 }

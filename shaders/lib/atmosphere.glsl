@@ -281,7 +281,10 @@ vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxD
         float detailNoise = fbm(samplePos * 3.0);
         
         // --- 10 GENERA CLOUD PROFILES ---
-        float cloudCoverage = fbm(p * 0.0003 - vec3(frameTimeCounter * 0.005, 0, 0));
+        // Dynamically shift cloud coverage based on time of day (more clouds in afternoon, fewer at night)
+        float dailyCycle = sin((float(worldTime) / 24000.0) * 3.14159 * 2.0 - 1.57); // -1 at dawn, 1 at dusk
+        float timeMod = mix(0.5, 1.5, (dailyCycle + 1.0) * 0.5); // Peak coverage at dusk, lowest at dawn
+        float cloudCoverage = fbm(p * 0.0003 - vec3(frameTimeCounter * 0.005, 0, frameTimeCounter * 0.002)) * timeMod;
         
         // Mid-Level Clouds
         // 4. Altocumulus: Rounded patches
