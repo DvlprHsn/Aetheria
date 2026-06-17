@@ -5,8 +5,12 @@
 
 uniform sampler2D texture;
 uniform sampler2D lightmap;
+uniform sampler2D shadowtex0;
 uniform vec3 sunPosition;
 uniform vec3 upPosition;
+uniform mat4 gbufferModelViewInverse;
+uniform mat4 shadowModelView;
+uniform mat4 shadowProjection;
 
 varying vec2 texcoord;
 varying vec2 lmcoord;
@@ -76,11 +80,18 @@ void main() {
     // Specular highlight only where sunlight directly hits
     vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight;
     
+    // Shadows!
+    vec3 shadowCoord = getShadowCoord(viewPos, gbufferModelViewInverse, shadowModelView, shadowProjection);
+    float shadowFactor = getShadow(shadowtex0, shadowCoord);
+    
+    // Smooth transition for shadow based on light map so caves aren't affected by shadow acne
+    shadowFactor = mix(1.0, shadowFactor, skyLight);
+    
     // Final lighting = ambient + directional + torch
-    vec3 finalLight = (ambientColor * skyLight) + directionalLight + currentTorchLight;
+    vec3 finalLight = (ambientColor * skyLight) + (directionalLight * shadowFactor) + currentTorchLight;
     
     // Apply lighting
-    albedo.rgb = albedo.rgb * finalLight + specularLight;
+    albedo.rgb = albedo.rgb * finalLight + (specularLight * shadowFactor);
     
     // Custom Sky-based fog depending on time of day
     vec3 fogColorDay = mix(daySunColor, vec3(0.5, 0.7, 1.0), 0.5);
