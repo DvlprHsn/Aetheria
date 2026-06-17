@@ -96,20 +96,26 @@ vec3 getSkyColor(vec3 rayDir, vec3 sunDir) {
     
     // Sun and Moon Discs with realistic glows
     float cosThetaSun = dot(rayDir, sunDir);
-    float sunDisc = smoothstep(0.9997, 0.9999, cosThetaSun);
-    float sunGlow = pow(max(0.0, cosThetaSun), 80.0) * dayFactor;
+    float sunDisc = smoothstep(0.9998, 0.9999, cosThetaSun);
+    float sunGlow = pow(max(0.0, cosThetaSun), 200.0) * dayFactor;
+    float sunCorona = pow(max(0.0, cosThetaSun), 40.0) * dayFactor * 0.5;
+    
+    // Smooth sunset transition for sun
+    float sunsetIntensity = max(0.0, 1.0 - abs(sunHeight) * 5.0);
+    vec3 sunDiscColor = mix(vec3(2.5, 2.3, 1.8), vec3(2.0, 0.8, 0.2), sunsetIntensity);
     
     float cosThetaMoon = dot(rayDir, -sunDir);
-    float moonDisc = smoothstep(0.9996, 0.9998, cosThetaMoon);
-    float moonGlow = pow(max(0.0, cosThetaMoon), 50.0) * (1.0 - dayFactor);
+    float moonDisc = smoothstep(0.9997, 0.9998, cosThetaMoon);
+    float moonGlow = pow(max(0.0, cosThetaMoon), 100.0) * (1.0 - dayFactor);
+    float moonCorona = pow(max(0.0, cosThetaMoon), 30.0) * (1.0 - dayFactor) * 0.3;
     
     // Add sun
-    baseCol += vec3(sunGlow * 0.5) * vec3(1.0, 0.9, 0.7);
-    baseCol = mix(baseCol, vec3(2.0, 1.8, 1.4), sunDisc * dayFactor);
+    baseCol += vec3(sunGlow + sunCorona) * mix(vec3(1.2, 1.1, 0.9), vec3(1.5, 0.4, 0.1), sunsetIntensity);
+    baseCol = mix(baseCol, sunDiscColor, sunDisc * dayFactor);
     
     // Add moon
-    baseCol += vec3(moonGlow * 0.2) * vec3(0.5, 0.6, 0.8);
-    baseCol = mix(baseCol, vec3(0.8, 0.9, 1.1), moonDisc * (1.0 - dayFactor));
+    baseCol += vec3(moonGlow + moonCorona) * vec3(0.5, 0.6, 0.8);
+    baseCol = mix(baseCol, vec3(0.9, 0.95, 1.1), moonDisc * (1.0 - dayFactor));
     
     return baseCol;
 }
@@ -168,39 +174,52 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
         vec3 p = rayOrigin + rayDir * t;
         
         // Foamy noise sampling
-        vec3 samplePos = p * 0.008; // scale
-        samplePos.x += frameTimeCounter * 0.05; // wind
+        vec3 samplePos = p * 0.004; // natural scale
+        samplePos.x += frameTimeCounter * 0.1; // wind
         
-        // Base shape
+        // Calculate structural noise
         float n = fbm(samplePos);
+        float fineNoise = fbm(samplePos * 3.0);
+        n -= fineNoise * 0.15; // erode edges
         
-        // Height gradient (rounded bottoms, wispy tops)
+        // Macro coverage for clustered natural clouds that don't cover the whole sky
+        vec3 covPos = p * 0.001;
+        covPos.z -= frameTimeCounter * 0.05;
+        float coverage = fbm(covPos);
+        coverage = smoothstep(0.35, 0.65, coverage);
+        
+        // Height gradient (sharp, flat bottoms, sweeping wispy tops)
         float heightFrac = (p.y - cloudMinHeight) / cloudThickness;
-        float verticalGradient = smoothstep(0.0, 0.2, heightFrac) * smoothstep(1.0, 0.4, heightFrac);
+        float verticalGradient = smoothstep(0.0, 0.1, heightFrac) * smoothstep(1.0, 0.3, heightFrac);
         
-        float density = n * verticalGradient - 0.35; // Cloud threshold
+        float baseThreshold = 1.0;
+        float density = (n - baseThreshold + coverage) * verticalGradient;
         
         if (density > 0.0) {
-            density *= 4.0; // Scale density
+            density *= 8.0; // Thick volumetric density
             
-            // Lighting sample inside cloud
-            float densSun = fbm(samplePos + lightDir * 0.02) - 0.35;
+            // Lighting sample inside cloud looking towards light source
+            float densSun = fbm(samplePos + lightDir * 0.03) - baseThreshold + coverage;
             float lightTransmittance = exp(-max(0.0, densSun) * 3.0); // self-shadowing
             
             // Powder effect (darker edges)
             float powder = 1.0 - exp(-density * 2.0);
             
-            // Ambient lighting
-            vec3 dayAmbient = mix(vec3(0.5, 0.6, 0.7), vec3(0.8, 0.9, 1.0), heightFrac);
-            vec3 nightAmbient = mix(vec3(0.05, 0.05, 0.08), vec3(0.1, 0.15, 0.2), heightFrac);
+            // Ambient energy
+            vec3 dayAmbient = mix(vec3(0.4, 0.5, 0.65), vec3(0.7, 0.8, 0.95), heightFrac);
+            vec3 nightAmbient = mix(vec3(0.01, 0.02, 0.05), vec3(0.05, 0.08, 0.12), heightFrac);
             vec3 ambient = mix(nightAmbient, dayAmbient, dayFactor);
             
-            // Direct lighting
-            vec3 dayDirect = vec3(1.2, 1.1, 0.9);
-            vec3 nightDirect = vec3(0.1, 0.15, 0.2);
+            // Sunset influence on clouds
+            float sunsetFactor = smoothstep(0.0, 0.3, 1.0 - abs(sunDir.y) * 4.0);
+            vec3 sunsetCloud = vec3(1.0, 0.4, 0.1) * sunsetFactor;
+            
+            // Direct light
+            vec3 dayDirect = mix(vec3(1.2, 1.1, 1.0), sunsetCloud, sunsetFactor);
+            vec3 nightDirect = vec3(0.1, 0.15, 0.25); // Moonlight
             vec3 directColor = mix(nightDirect, dayDirect, dayFactor);
             
-            // Final cloud color at this sample
+            // Final cloud color (Henyey-Greenstein scattering + powder)
             vec3 cloudColor = ambient + directColor * lightTransmittance * powder * (1.0 + phase * 2.0);
             
             vec4 col = vec4(cloudColor * density, density);
