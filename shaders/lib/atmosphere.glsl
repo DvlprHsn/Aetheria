@@ -56,13 +56,6 @@ float phaseHenyeyGreenstein(float cosTheta, float g) {
 }
 
 // --- WEATHER & TIME PROFILES ---
-// Weight function for time of day (circular 0-24000)
-float getPhaseWeight(float t, float center, float width) {
-    float diff = abs(t - center);
-    if(diff > 12000.0) diff = 24000.0 - diff;
-    return max(0.0, 1.0 - diff / width);
-}
-
 struct TimeProfile {
     float dawn;
     float morning;
@@ -72,17 +65,23 @@ struct TimeProfile {
     float midnight;
 };
 
-TimeProfile getTimeProfile() {
-    float t = float(worldTime);
+TimeProfile getTimeProfile(vec3 sunDir) {
+    float sunHeight = sunDir.y;
     TimeProfile tp;
-    tp.dawn = getPhaseWeight(t, 23500.0, 1500.0);
-    tp.morning = getPhaseWeight(t, 2500.0, 2000.0);
-    tp.day = getPhaseWeight(t, 6000.0, 3000.0);
-    tp.sunset = getPhaseWeight(t, 12500.0, 1500.0);
-    tp.night = getPhaseWeight(t, 16000.0, 2000.0) + getPhaseWeight(t, 20000.0, 2000.0);
-    tp.midnight = getPhaseWeight(t, 18000.0, 2000.0);
     
-    // Normalize safely
+    tp.day = smoothstep(0.1, 0.4, sunHeight);
+    
+    float nightFull = 1.0 - smoothstep(-0.1, 0.1, sunHeight);
+    tp.midnight = 1.0 - smoothstep(-0.4, -0.1, sunHeight);
+    tp.night = max(0.0, nightFull - tp.midnight);
+    
+    float twilight = smoothstep(-0.15, 0.05, sunHeight) * smoothstep(0.15, -0.05, sunHeight);
+    tp.dawn = twilight * 0.5;
+    tp.sunset = twilight * 0.5;
+    
+    float morningEve = smoothstep(0.0, 0.2, sunHeight) * smoothstep(0.4, 0.1, sunHeight);
+    tp.morning = morningEve;
+    
     float total = tp.dawn + tp.morning + tp.day + tp.sunset + tp.night + tp.midnight;
     if (total > 0.0) {
         tp.dawn /= total; tp.morning /= total; tp.day /= total;
@@ -95,7 +94,7 @@ TimeProfile getTimeProfile() {
 
 // --- SKY RENDERING ---
 vec3 getSkyColor(vec3 rayDir, vec3 sunDir) {
-    TimeProfile tp = getTimeProfile();
+    TimeProfile tp = getTimeProfile(sunDir);
     float isThunder = max(0.0, wetness * 1.5 - 0.5); // Emulate thunder phase from extreme wetness
     float rainFade = clamp(wetness * 2.0, 0.0, 1.0);
     
@@ -197,7 +196,8 @@ vec4 renderHighClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir) {
     
     vec3 p = rayOrigin + rayDir * t;
     vec3 samplePos = p * 0.0001; // Wide scale
-    samplePos.x += frameTimeCounter * 0.001;
+    samplePos.x += frameTimeCounter * 0.005; // Noticeable drift for high clouds
+    samplePos.z += frameTimeCounter * 0.002;
     
     // 1. Cirrus: Fibrous, hair-like
     float typeCirrus = fbm_cirrus(samplePos);
@@ -216,7 +216,7 @@ vec4 renderHighClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir) {
     
     if (density <= 0.0) return vec4(0.0);
     
-    TimeProfile tp = getTimeProfile();
+    TimeProfile tp = getTimeProfile(sunDir);
     float dayLevel = tp.morning + tp.day + tp.sunset + tp.dawn;
     float nightLevel = tp.night + tp.midnight;
     
@@ -228,7 +228,7 @@ vec4 renderHighClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir) {
 }
 
 vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
-    TimeProfile tp = getTimeProfile();
+    TimeProfile tp = getTimeProfile(sunDir);
     float isThunder = max(0.0, wetness * 1.5 - 0.5);
     
     // Cloud boundaries
@@ -275,16 +275,24 @@ vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxD
         vec3 p = rayOrigin + rayDir * t;
         float heightFrac = clamp((p.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
         
-        vec3 samplePos = p * 0.002;
-        samplePos.x += frameTimeCounter * 0.01;
+        vec3 windOffset = vec3(frameTimeCounter * 0.005, 0.0, frameTimeCounter * 0.002);
+        vec3 pOffset = p;
+        pOffset.x += windOffset.x * 2000.0;
+        pOffset.z += windOffset.z * 2000.0;
+        
+        vec3 samplePos = pOffset * 0.002;
         float baseNoise = fbm(samplePos);
         float detailNoise = fbm(samplePos * 3.0);
         
         // --- 10 GENERA CLOUD PROFILES ---
-        // Dynamically shift cloud coverage based on time of day (more clouds in afternoon, fewer at night)
-        float dailyCycle = sin((float(worldTime) / 24000.0) * 3.14159 * 2.0 - 1.57); // -1 at dawn, 1 at dusk
-        float timeMod = mix(0.5, 1.5, (dailyCycle + 1.0) * 0.5); // Peak coverage at dusk, lowest at dawn
-        float cloudCoverage = fbm(p * 0.0003 - vec3(frameTimeCounter * 0.005, 0, frameTimeCounter * 0.002)) * timeMod;
+        // Dynamically shift cloud coverage based on time of day (more clouds in afternoon/evening)
+        // Use sun height to determine day cycle instead of worldTime to support frozen daylight cycle correctly
+        float sunHeight = sunDir.y;
+        float dayFade = smoothstep(-0.2, 0.5, sunHeight); // 0 at night, 1 at noon
+        float timeMod = mix(0.7, 1.3, dayFade); // More coverage during daytime
+
+        // Animating clouds using frameTimeCounter
+        float cloudCoverage = fbm(pOffset * 0.0003) * timeMod;
         
         // Mid-Level Clouds
         // 4. Altocumulus: Rounded patches
