@@ -54,7 +54,7 @@ void main() {
     }
     
     // Render clouds
-    vec4 clouds = renderClouds(rayOrigin, rayDir, sunDir, maxDist);
+    vec4 clouds = renderAtmosphereClouds(rayOrigin, rayDir, sunDir, maxDist);
     
     // Blend final output
     vec3 finalColor = color.rgb;

@@ -31,8 +31,23 @@ float fbm(vec3 p) {
     return f;
 }
 
+// Stretched FBM for Cirrus
+float fbm_cirrus(vec3 p) {
+    p.x *= 0.2; // Stretch along wind direction
+    p.z *= 0.8;
+    return fbm(p);
+}
+
+// Ripple FBM for Altocumulus / Cirrocumulus
+float fbm_ripples(vec3 p) {
+    p *= 3.0; // Higher frequency
+    float n = fbm(p);
+    return abs(n * 2.0 - 1.0); // Ridged noise
+}
+
 // --- ATMOSPHERIC OPTICS ---
 uniform float wetness;
+uniform int worldTime;
 
 // Henyey-Greenstein phase function for realistic cloud scattering
 float phaseHenyeyGreenstein(float cosTheta, float g) {
@@ -41,70 +56,89 @@ float phaseHenyeyGreenstein(float cosTheta, float g) {
 }
 
 // --- SKY RENDERING ---
+// Time of Day Profiles
+float getMorningFactor(float sunHeight) {
+    return smoothstep(0.0, 0.2, sunHeight) * smoothstep(0.4, 0.2, sunHeight);
+}
+float getDawnFactor(float sunHeight) {
+    return smoothstep(-0.1, 0.05, sunHeight) * smoothstep(0.1, -0.05, sunHeight);
+}
+float getDayFactor(float sunHeight) {
+    return smoothstep(0.1, 0.3, sunHeight);
+}
+
 vec3 getSkyColor(vec3 rayDir, vec3 sunDir) {
-    vec3 skyBlue = vec3(0.12, 0.3, 0.7);
-    vec3 horizonColor = vec3(0.6, 0.75, 0.9); // bright near horizon
-    vec3 sunsetColor = vec3(1.0, 0.3, 0.05);
-    
     float sunHeight = sunDir.y;
     
-    // Day/Night cycle base colors
-    float dayFactor = smoothstep(-0.1, 0.1, sunHeight);
-    vec3 nightBlue = vec3(0.01, 0.02, 0.05);
-    vec3 nightHorizon = vec3(0.02, 0.05, 0.12);
+    // Base time factors
+    float dayF = getDayFactor(sunHeight);
+    float dawnF = getDawnFactor(sunHeight);
+    float morningF = getMorningFactor(sunHeight);
+    float nightF = 1.0 - smoothstep(-0.1, 0.1, sunHeight);
     
-    skyBlue = mix(nightBlue, skyBlue, dayFactor);
-    horizonColor = mix(nightHorizon, horizonColor, dayFactor);
+    // Clear Sky Colors
+    vec3 skyDay = vec3(0.12, 0.3, 0.7);
+    vec3 horizDay = vec3(0.6, 0.75, 0.9);
+    
+    vec3 skyMorning = vec3(0.15, 0.25, 0.6);
+    vec3 horizMorning = vec3(0.8, 0.6, 0.7);
+    
+    vec3 skyDawn = vec3(0.2, 0.1, 0.3);
+    vec3 horizDawn = vec3(1.0, 0.3, 0.05); // Sunset / Dawn
+    
+    vec3 skyNight = vec3(0.01, 0.015, 0.04);
+    vec3 horizNight = vec3(0.02, 0.03, 0.08);
+    
+    // Stormy Sky Colors (Rain/Thunder)
+    vec3 stormSkyDay = vec3(0.25, 0.28, 0.32);
+    vec3 stormHorizDay = vec3(0.35, 0.38, 0.42);
+    
+    vec3 stormSkyNight = vec3(0.01, 0.01, 0.02);
+    vec3 stormHorizNight = vec3(0.02, 0.02, 0.03);
+    
+    // Blend times for clear
+    vec3 clearSky = skyNight * nightF + skyDawn * dawnF + skyMorning * morningF + skyDay * dayF;
+    vec3 clearHoriz = horizNight * nightF + horizDawn * dawnF + horizMorning * morningF + horizDay * dayF;
+    
+    // Blend times for storm
+    float dayStorm = clamp(dayF + morningF + dawnF, 0.0, 1.0);
+    vec3 stormSky = mix(stormSkyNight, stormSkyDay, dayStorm);
+    vec3 stormHoriz = mix(stormHorizNight, stormHorizDay, dayStorm);
+    
+    // Mix clear and storm by wetness
+    vec3 finalSky = mix(clearSky, stormSky, wetness);
+    vec3 finalHoriz = mix(clearHoriz, stormHoriz, wetness);
     
     // Elevation mix
     float elevation = max(0.0, rayDir.y);
     float horizonMix = pow(1.0 - elevation, 4.0);
-    
-    vec3 baseCol = mix(skyBlue, horizonColor, horizonMix);
-    
-    // Stormy sky color overlay
-    vec3 stormSkyDay = vec3(0.3, 0.32, 0.35);
-    vec3 stormSkyNight = vec3(0.02, 0.03, 0.04);
-    vec3 stormSky = mix(stormSkyNight, stormSkyDay, dayFactor);
-    baseCol = mix(baseCol, stormSky, wetness);
+    vec3 baseCol = mix(finalSky, finalHoriz, horizonMix);
     
     // Stars at night
-    if (dayFactor < 1.0 && rayDir.y > 0.0) {
+    if (nightF > 0.0 && rayDir.y > 0.0) {
         float starVal = hash(rayDir * 200.0);
-        float starIntensity = pow(starVal, 250.0) * (1.0 - dayFactor);
-        baseCol += vec3(starIntensity) * (1.0 - wetness); // no stars in rain
+        float starIntensity = pow(starVal, 250.0) * nightF * (1.0 - wetness); // No stars during storm
+        baseCol += vec3(starIntensity);
     }
     
-    // Sunset global scatter
-    float sunMix = max(0.0, 1.0 - abs(sunHeight) * 3.5);
-    vec3 sunHoriz = vec3(sunDir.x, 0.0001, sunDir.z); // Epsilon to prevent NaN
-    float toSun = max(0.0, dot(rayDir, normalize(sunHoriz)));
-    vec3 sunsetGlow = sunsetColor * pow(toSun, 2.5) * horizonMix * sunMix * 1.5;
-    
-    baseCol += sunsetGlow * (1.0 - wetness * 0.8); // dull sunset in rain
-    
-    // Sun and Moon Discs with realistic glows
+    // Sun and Moon Discs
     float cosThetaSun = dot(rayDir, sunDir);
     float sunDisc = smoothstep(0.9998, 0.9999, cosThetaSun);
-    float sunGlow = pow(max(0.0, cosThetaSun), 200.0) * dayFactor;
-    float sunCorona = pow(max(0.0, cosThetaSun), 40.0) * dayFactor * 0.5;
+    float sunGlow = pow(max(0.0, cosThetaSun), 200.0) * (1.0 - nightF);
+    float sunCorona = pow(max(0.0, cosThetaSun), 40.0) * (1.0 - nightF) * 0.5;
     
-    // Smooth sunset transition for sun
-    float sunsetIntensity = max(0.0, 1.0 - abs(sunHeight) * 5.0);
-    vec3 sunDiscColor = mix(vec3(2.5, 2.3, 1.8), vec3(2.0, 0.8, 0.2), sunsetIntensity);
+    vec3 sunDiscColor = mix(vec3(2.5, 2.3, 1.8), vec3(2.0, 0.8, 0.2), dawnF);
     
     float cosThetaMoon = dot(rayDir, -sunDir);
     float moonDisc = smoothstep(0.9997, 0.9998, cosThetaMoon);
-    float moonGlow = pow(max(0.0, cosThetaMoon), 100.0) * (1.0 - dayFactor);
-    float moonCorona = pow(max(0.0, cosThetaMoon), 30.0) * (1.0 - dayFactor) * 0.3;
+    float moonGlow = pow(max(0.0, cosThetaMoon), 100.0) * nightF;
+    float moonCorona = pow(max(0.0, cosThetaMoon), 30.0) * nightF * 0.3;
     
-    // Add sun
-    baseCol += vec3(sunGlow + sunCorona) * mix(vec3(1.2, 1.1, 0.9), vec3(1.5, 0.4, 0.1), sunsetIntensity) * (1.0 - wetness);
-    baseCol = mix(baseCol, sunDiscColor, sunDisc * dayFactor * (1.0 - wetness));
+    baseCol += vec3(sunGlow + sunCorona) * mix(vec3(1.2, 1.1, 0.9), vec3(1.5, 0.4, 0.1), dawnF) * (1.0 - wetness);
+    baseCol = mix(baseCol, sunDiscColor, sunDisc * (1.0 - nightF) * (1.0 - wetness));
     
-    // Add moon
     baseCol += vec3(moonGlow + moonCorona) * vec3(0.5, 0.6, 0.8) * (1.0 - wetness);
-    baseCol = mix(baseCol, vec3(0.9, 0.95, 1.1), moonDisc * (1.0 - dayFactor) * (1.0 - wetness));
+    baseCol = mix(baseCol, vec3(0.9, 0.95, 1.1), moonDisc * nightF * (1.0 - wetness));
     
     return baseCol;
 }
@@ -116,13 +150,60 @@ float intersectPlane(vec3 rayOrigin, vec3 rayDir, float height) {
     return t;
 }
 
-// Raymarching volumetric 3D clouds
-vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
-    float cloudMinHeight = 150.0;
-    float cloudMaxHeight = 300.0;
+// High-Level clouds (Cirrus, Cirrocumulus, Cirrostratus) rendered as a 2D plane for crisp detail
+vec4 renderHighClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir) {
+    if (rayDir.y <= 0.01) return vec4(0.0);
+    
+    float height = 600.0; // High altitude above volumetric
+    float t = intersectPlane(rayOrigin, rayDir, height);
+    if (t < 0.0 || t > 10000.0) return vec4(0.0);
+    
+    vec3 p = rayOrigin + rayDir * t;
+    vec3 samplePos = p * 0.0002;
+    samplePos.x += frameTimeCounter * 0.002;
+    
+    // Choose high cloud type based on weather approach
+    // Sunny = Cirrus
+    // Pre-rain (wetness starting) = Cirrostratus / Cirrocumulus
+    float typeCirrus = fbm_cirrus(samplePos);
+    float typeCirrocumulus = fbm_ripples(samplePos);
+    float typeCirrostratus = smoothstep(0.2, 0.8, fbm(samplePos * 0.5)); // broad veil
+    
+    float stormApproach = clamp(wetness * 2.0, 0.0, 1.0); // 0 to 1 as rain approaches
+    
+    float noiseVal = mix(typeCirrus, typeCirrocumulus, stormApproach);
+    noiseVal = mix(noiseVal, typeCirrostratus, smoothstep(0.5, 1.0, stormApproach));
+    
+    float density = smoothstep(0.4, 0.7, noiseVal) * 0.5; // Thin
+    
+    if (density <= 0.0) return vec4(0.0);
+    
+    // Lighting
+    float sunHeight = sunDir.y;
+    float dawnF = getDawnFactor(sunHeight);
+    float nightF = 1.0 - smoothstep(-0.1, 0.1, sunHeight);
+    
+    vec3 cloudCol = vec3(1.0);
+    cloudCol = mix(cloudCol, vec3(1.0, 0.5, 0.2), dawnF); // dawn colors
+    cloudCol = mix(cloudCol, vec3(0.05, 0.08, 0.12), nightF); // night colors
+    
+    return vec4(cloudCol * density, density * (1.0 - wetness)); // Fade out out fully rainy
+}
+
+// Raymarching volumetric 3D clouds (Low & Mid level, Vertical Development)
+// Handles: Stratus, Stratocumulus, Nimbostratus, Altocumulus, Altostratus, Cumulus, Cumulonimbus
+vec4 renderVolumetricClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
+    float sunHeight = sunDir.y;
+    float dayF = getDayFactor(sunHeight);
+    float dawnF = getDawnFactor(sunHeight);
+    float morningF = getMorningFactor(sunHeight);
+    float nightF = 1.0 - smoothstep(-0.1, 0.1, sunHeight);
+    
+    // Cloud boundaries
+    float cloudMinHeight = 100.0;
+    float cloudMaxHeight = mix(250.0, 500.0, wetness); // Thunder/Rain clouds grow vertically (Cumulonimbus)
     float cloudThickness = cloudMaxHeight - cloudMinHeight;
     
-    // Intersect with cloud layer
     float tMin = intersectPlane(rayOrigin, rayDir, cloudMinHeight);
     float tMax = intersectPlane(rayOrigin, rayDir, cloudMaxHeight);
     
@@ -137,13 +218,12 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     
     if (tMin > maxDist) return vec4(0.0);
     tMax = min(tMax, maxDist);
-    tMax = min(tMax, tMin + 3000.0); // Limit maximum draw distance for clouds
+    tMax = min(tMax, tMin + 3500.0);
     if (tMax < tMin) return vec4(0.0);
     
     float t = tMin;
-    float stepSize = (tMax - tMin) / 80.0; // 80 steps for perfect 3D volume clarity
+    float stepSize = (tMax - tMin) / 80.0; 
     
-    // Dithering to hide banding
     vec2 coord = gl_FragCoord.xy;
     float dither = fract(sin(dot(coord, vec2(12.9898, 78.233))) * 43758.5453) * stepSize;
     t += dither;
@@ -151,99 +231,101 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     vec4 sum = vec4(0.0);
     
     vec3 lightDir = sunDir.y > 0.0 ? sunDir : -sunDir;
-    float dayFactor = smoothstep(-0.1, 0.1, sunDir.y);
     float cosTheta = dot(rayDir, lightDir);
-    
-    // Dual Henyey-Greenstein phase for forward and backward scattering
     float phase = mix(phaseHenyeyGreenstein(cosTheta, 0.7), phaseHenyeyGreenstein(cosTheta, -0.4), 0.3);
     
     for(int i = 0; i < 80; i++) {
         if (t >= tMax || sum.a >= 0.99) break;
         
         vec3 p = rayOrigin + rayDir * t;
+        float heightFrac = clamp((p.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
         
-        // Foamy noise sampling
-        vec3 samplePos = p * 0.003; // perfect natural scale, larger cohesive clouds
-        samplePos.x += frameTimeCounter * 0.01; // slow, realistic wind
+        // Profiles for genera
+        vec3 samplePos = p * 0.003;
+        samplePos.x += frameTimeCounter * 0.01;
         
-        // Calculate structural noise
-        float n = fbm(samplePos);
-        float fineNoise = fbm(samplePos * 4.0);
-        n -= fineNoise * mix(0.2, 0.1, wetness); // clear eroded edges, less erosion when rainy
+        float baseNoise = fbm(samplePos);
+        float detailNoise = fbm(samplePos * 4.0);
         
-        // Macro coverage for clustered natural clouds that don't cover the whole sky
-        vec3 covPos = p * 0.0005; // larger distinct cloud groups
-        covPos.z -= frameTimeCounter * 0.005;
-        float coverage = fbm(covPos);
+        // Genus: Cumulus (Sunny, low altitude)
+        float cumulus = baseNoise - detailNoise * 0.2;
+        float cumulusCoverage = fbm(p * 0.0005 - vec3(0, 0, frameTimeCounter * 0.005));
+        cumulus = (cumulus - 0.7 + cumulusCoverage * 0.5);
+        // Genus: Stratocumulus (Sunny/Cloudy, wider flat bases)
+        float stratoCumulus = baseNoise - abs(detailNoise * 0.3) - 0.3;
+        // Genus: Nimbostratus / Cumulonimbus (Rainy, solid, tall)
+        float nimboStratus = baseNoise - detailNoise * 0.1 + 0.3; // Very dense
         
-        // Adjust coverage based on weather
-        float wetCoverage = mix(0.1, 0.8, wetness); // clear weather: low coverage, rain: high coverage
-        coverage = coverage + wetCoverage - 0.2;
-        coverage = smoothstep(0.4, 0.7, coverage);
+        // Blend Genera based on weather
+        // wetness 0.0: Cumulus / Stratocumulus
+        // wetness 0.5: Altostratus transition
+        // wetness 1.0: Cumulonimbus (towering) & Nimbostratus
         
-        // Height gradient (sharp, flat bottoms, sweeping wispy tops)
-        float heightFrac = (p.y - cloudMinHeight) / cloudThickness;
-        float bottomGrad = mix(0.1, 0.05, wetness); // flatter bottoms in rain
-        float verticalGradient = smoothstep(0.0, bottomGrad, heightFrac) * smoothstep(1.0, mix(0.3, 0.6, wetness), heightFrac);
+        float n = mix(mix(cumulus, stratoCumulus, 0.3), nimboStratus, wetness);
         
-        float baseThreshold = 0.8;
-        float density = (n - baseThreshold + coverage) * verticalGradient;
+        // Vertical shaping
+        float bottomRound = mix(0.1, 0.01, wetness); // Flat bottom for storm, rounded for strato
+        float topWispy = mix(0.4, 0.8, wetness);
+        float verticalGradient = smoothstep(0.0, bottomRound, heightFrac) * smoothstep(1.0, topWispy, heightFrac);
+        
+        float density = n * verticalGradient;
         
         if (density > 0.0) {
-            // Thicker and denser clouds during rain
-            density *= mix(8.0, 15.0, wetness); 
+            density *= mix(6.0, 20.0, wetness); // Immensely dense storms
             
-            // Lighting sample inside cloud looking towards light source
-            float densSun = fbm(samplePos + lightDir * 0.03) - baseThreshold + coverage;
-            float lightTransmittance = exp(-max(0.0, densSun) * mix(3.0, 6.0, wetness)); // heavy self-shadowing in rain
+            // Self shadowing
+            vec3 lightStep = lightDir * (mix(30.0, 15.0, wetness));
+            vec3 lP = p + lightStep;
+            float lHeightFrac = clamp((lP.y - cloudMinHeight) / cloudThickness, 0.0, 1.0);
+            float densSun = (fbm(lP * 0.003) - 0.4) * smoothstep(0.0, bottomRound, lHeightFrac);
+            densSun = mix(max(0.0, densSun), max(0.0, densSun + 0.5), wetness); // Thicker shadow in storm
             
-            // Powder effect (darker edges)
+            float lightTransmittance = exp(-densSun * mix(2.0, 8.0, wetness)); 
+            
             float powder = 1.0 - exp(-density * 2.0);
             
-            // Ambient energy (darker, stormy ambient in rain)
-            vec3 dayAmbient = mix(vec3(0.4, 0.5, 0.65), vec3(0.7, 0.8, 0.95), heightFrac);
-            dayAmbient = mix(dayAmbient, vec3(0.25, 0.3, 0.35), wetness);
+            // Coloring
+            vec3 dayAmbient = mix(mix(vec3(0.4, 0.45, 0.5), vec3(0.6, 0.65, 0.7), heightFrac), vec3(0.15, 0.18, 0.22), wetness);
+            vec3 nightAmbient = mix(vec3(0.01, 0.015, 0.02), vec3(0.03, 0.04, 0.05), wetness);
+            vec3 dawnAmbient = vec3(0.3, 0.2, 0.25);
             
-            vec3 nightAmbient = mix(vec3(0.01, 0.02, 0.05), vec3(0.05, 0.08, 0.12), heightFrac);
-            nightAmbient = mix(nightAmbient, vec3(0.02, 0.03, 0.04), wetness);
+            vec3 ambient = dayAmbient * dayF + nightAmbient * nightF + dawnAmbient * dawnF + dayAmbient * morningF;
             
-            vec3 ambient = mix(nightAmbient, dayAmbient, dayFactor);
+            vec3 dayDirect = mix(vec3(1.1, 1.05, 1.0), vec3(0.3, 0.35, 0.4), wetness);
+            vec3 nightDirect = vec3(0.05, 0.08, 0.12);
+            vec3 dawnDirect = vec3(1.2, 0.4, 0.1);
+            vec3 morningDirect = vec3(1.1, 0.8, 0.5);
             
-            // Sunset influence on clouds
-            float sunsetFactor = smoothstep(0.0, 0.3, 1.0 - abs(sunDir.y) * 4.0);
-            vec3 sunsetCloud = vec3(1.0, 0.4, 0.1) * sunsetFactor;
-            sunsetCloud = mix(sunsetCloud, vec3(0.4, 0.2, 0.1), wetness); // duller sunset in rain
+            vec3 directColor = dayDirect * dayF + nightDirect * nightF + dawnDirect * dawnF + morningDirect * morningF;
             
-            // Direct light
-            vec3 dayDirect = mix(vec3(1.2, 1.1, 1.0), sunsetCloud, sunsetFactor);
-            dayDirect = mix(dayDirect, vec3(0.5, 0.55, 0.6), wetness); // muted sun in rain
-            
-            vec3 nightDirect = vec3(0.1, 0.15, 0.25); // Moonlight
-            nightDirect = mix(nightDirect, vec3(0.05, 0.08, 0.12), wetness);
-            
-            vec3 directColor = mix(nightDirect, dayDirect, dayFactor);
-            
-            // Final cloud color (Henyey-Greenstein scattering + powder)
-            vec3 cloudColor = ambient + directColor * lightTransmittance * powder * (1.0 + phase * 2.0);
+            vec3 cloudColor = ambient + directColor * lightTransmittance * powder * (1.0 + phase * 2.5);
             
             vec4 col = vec4(cloudColor * density, density);
-            
-            // Alpha compositing
             sum += col * (1.0 - sum.a);
         }
-        
         t += stepSize;
     }
     
     return sum;
 }
 
-// --- FOG RENDERING ---
-// Realistic volumetric fog
-vec3 applyFog(vec3 color, float dist, vec3 rayDir, vec3 sunDir, float depth) {
-    float fogDensity = mix(0.003, 0.008, wetness); // thicker fog in rain
+// --- MAIN CLOUD ALLOCATOR ---
+// Blends high clouds and volumetric clouds seamlessly
+vec4 renderAtmosphereClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
+    vec4 volClouds = renderVolumetricClouds(rayOrigin, rayDir, sunDir, maxDist);
+    // Apply high clouds behind volumetric clouds
+    vec4 highClouds = renderHighClouds(rayOrigin, rayDir, sunDir);
     
-    // Decrease fog density looking up into the sky so we can see stars/clouds
+    // Blend high clouds over nothing, then volumetric over that
+    vec4 combined = highClouds;
+    combined = volClouds + combined * (1.0 - volClouds.a);
+    return combined;
+}
+
+// --- FOG RENDERING ---
+vec3 applyFog(vec3 color, float dist, vec3 rayDir, vec3 sunDir, float depth) {
+    float fogDensity = mix(0.002, 0.009, wetness); // Foggy mornings & storms
+    
     if (depth > 0.99999) {
         float elevation = max(0.0, rayDir.y);
         fogDensity *= exp(-elevation * 10.0);
@@ -251,19 +333,9 @@ vec3 applyFog(vec3 color, float dist, vec3 rayDir, vec3 sunDir, float depth) {
     
     float fogFactor = 1.0 - exp(-dist * fogDensity);
     
-    float sunHeight = sunDir.y;
-    float dayFactor = smoothstep(-0.1, 0.1, sunHeight);
+    vec3 skyHorizon = getSkyColor(vec3(rayDir.x, 0.0, rayDir.z), sunDir);
     
-    // Sample the sky color at the horizon for realistic fog coloring
-    vec3 horizonBlue = mix(vec3(0.02, 0.05, 0.12), vec3(0.6, 0.75, 0.9), dayFactor);
-    float toSun = max(0.0, dot(rayDir, normalize(vec3(sunDir.x, 0.0001, sunDir.z))));
-    vec3 sunsetGlow = vec3(1.0, 0.3, 0.05) * pow(toSun, 2.5) * max(0.0, 1.0 - abs(sunHeight) * 3.5) * 1.5;
-    
-    vec3 fogColor = horizonBlue + sunsetGlow;
-    
-    // Greyer, darker fog during rain
-    vec3 rainyFogColor = mix(vec3(0.05, 0.06, 0.08), vec3(0.3, 0.35, 0.4), dayFactor);
-    fogColor = mix(fogColor, rainyFogColor, wetness);
-    
-    return mix(color, fogColor, fogFactor);
+    // Fog color is mostly the horizon sky color
+    return mix(color, skyHorizon, fogFactor);
 }
+
