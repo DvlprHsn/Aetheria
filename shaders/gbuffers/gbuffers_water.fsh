@@ -70,19 +70,21 @@ void main() {
     float fresnel = pow(1.0 - max(dot(bumpNormal, viewDir), 0.0), 5.0);
     albedo.a = mix(albedo.a, 0.95, fresnel); // More opaque at grazing angles
     
-    vec3 directionalLight = currentLightColor * diffuse * skyLight;
-    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight;
-    
+    // Shadows
     vec3 shadowCoord = getShadowCoord(viewPos, gbufferModelViewInverse, shadowModelView, shadowProjection);
-    float shadowFactor = getShadow(shadowtex0, shadowCoord);
-    shadowFactor = mix(1.0, shadowFactor, skyLight);
+    float rawShadow = getShadow(shadowtex0, shadowCoord);
+    float shadowFactor = mix(1.0, rawShadow, skyLight * 0.9);
     
-    // Fake sky reflection based on fresnel
-    vec3 skyReflectionColor = mix(nightAmbient, daySunColor, isDay) * 1.5;
-    vec3 ambientWithReflection = mix(ambientColor, skyReflectionColor, fresnel * skyLight);
+    vec3 directionalLight = currentLightColor * diffuse * skyLight * shadowFactor;
+    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight * shadowFactor;
     
-    vec3 finalLight = (ambientWithReflection * skyLight) + (directionalLight * shadowFactor) + currentTorchLight;
-    albedo.rgb = albedo.rgb * finalLight + (specularLight * shadowFactor);
+    // Fake sky reflection based on fresnel and shadows
+    vec3 skyReflectionColor = mix(nightAmbient * 3.0, vec3(0.5, 0.8, 1.2), isDay) * 1.5;
+    vec3 ambientWithReflection = mix(ambientColor, skyReflectionColor * shadowFactor, fresnel * skyLight);
+    
+    vec3 minAmbient = vec3(0.08, 0.08, 0.12);
+    vec3 finalLight = max(ambientWithReflection * skyLight, minAmbient) + directionalLight + currentTorchLight;
+    albedo.rgb = albedo.rgb * finalLight + specularLight;
     
     vec3 fogColorDay = mix(daySunColor, vec3(0.5, 0.7, 1.0), 0.5);
     vec3 fogColorNight = nightAmbient;

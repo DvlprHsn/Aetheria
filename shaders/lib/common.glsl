@@ -53,7 +53,7 @@ float getShadow(sampler2D shadowtex, vec3 shadowCoord) {
     
     for(int x = -1; x <= 1; x++) {
         for(int y = -1; y <= 1; y++) {
-            float pcfDepth = texture2D(shadowtex, shadowCoord.xy + vec2(x, y) * texelSize).r;
+            float pcfDepth = texture2D(shadowtex, shadowCoord.xy + vec2(float(x), float(y)) * texelSize).r;
             shadow += currentDepth > pcfDepth ? 0.0 : 1.0;
         }
     }

@@ -74,24 +74,24 @@ void main() {
     // Calculate simple specular
     float specular = calculateSpecular(viewDir, lightDir, normal, shininess);
     
-    // Directional light depends on sky visibility
-    vec3 directionalLight = currentLightColor * diffuse * skyLight;
-    
-    // Specular highlight only where sunlight directly hits
-    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight;
-    
     // Shadows!
     vec3 shadowCoord = getShadowCoord(viewPos, gbufferModelViewInverse, shadowModelView, shadowProjection);
-    float shadowFactor = getShadow(shadowtex0, shadowCoord);
+    float rawShadow = getShadow(shadowtex0, shadowCoord);
+    float shadowFactor = mix(1.0, rawShadow, skyLight * 0.9); // Mostly apply shadow outdoors
     
-    // Smooth transition for shadow based on light map so caves aren't affected by shadow acne
-    shadowFactor = mix(1.0, shadowFactor, skyLight);
+    // Directional light depends on sky visibility
+    float shadowSmoothing = mix(1.0, shadowFactor, 0.8); // Softer shadows inside the lighted areas
+    vec3 directionalLight = currentLightColor * diffuse * skyLight * shadowSmoothing;
+    
+    // Specular highlight only where sunlight directly hits
+    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight * shadowFactor;
     
     // Final lighting = ambient + directional + torch
-    vec3 finalLight = (ambientColor * skyLight) + (directionalLight * shadowFactor) + currentTorchLight;
+    vec3 minAmbient = vec3(0.08, 0.08, 0.12);
+    vec3 finalLight = max(ambientColor * skyLight, minAmbient) + directionalLight + currentTorchLight;
     
     // Apply lighting
-    albedo.rgb = albedo.rgb * finalLight + (specularLight * shadowFactor);
+    albedo.rgb = albedo.rgb * finalLight + specularLight;
     
     // Custom Sky-based fog depending on time of day
     vec3 fogColorDay = mix(daySunColor, vec3(0.5, 0.7, 1.0), 0.5);

@@ -55,15 +55,17 @@ void main() {
     float specular = calculateSpecular(viewDir, lightDir, normal, 8.0);
     float specularIntensity = 0.05;
     
-    vec3 directionalLight = currentLightColor * diffuse * skyLight;
-    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight;
-    
+    // Shadows
     vec3 shadowCoord = getShadowCoord(viewPos, gbufferModelViewInverse, shadowModelView, shadowProjection);
-    float shadowFactor = getShadow(shadowtex0, shadowCoord);
-    shadowFactor = mix(1.0, shadowFactor, skyLight);
+    float rawShadow = getShadow(shadowtex0, shadowCoord);
+    float shadowFactor = mix(1.0, rawShadow, skyLight * 0.9);
     
-    vec3 finalLight = (ambientColor * skyLight) + (directionalLight * shadowFactor) + currentTorchLight;
-    albedo.rgb = albedo.rgb * finalLight + (specularLight * shadowFactor);
+    vec3 directionalLight = currentLightColor * diffuse * skyLight * shadowFactor;
+    vec3 specularLight = currentLightColor * specular * specularIntensity * skyLight * shadowFactor;
+    
+    vec3 minAmbient = vec3(0.08, 0.08, 0.12);
+    vec3 finalLight = max(ambientColor * skyLight, minAmbient) + directionalLight + currentTorchLight;
+    albedo.rgb = albedo.rgb * finalLight + specularLight;
     
     vec3 fogColorDay = mix(daySunColor, vec3(0.5, 0.7, 1.0), 0.5);
     vec3 fogColorNight = nightAmbient;

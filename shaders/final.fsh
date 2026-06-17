@@ -19,7 +19,12 @@ void main() {
     vec4 color = texture2D(gcolor, texcoord);
     
     // Noticeable exposure bump
-    color.rgb *= 2.0;
+    color.rgb *= 1.8;
+    
+    // Saturation and vibrance boost
+    float luminance = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 blend = color.rgb + (color.rgb - vec3(luminance)) * 0.3; // Saturation +30%
+    color.rgb = mix(blend, color.rgb, 0.5); 
     
     // Tonemapping
     color.rgb = ACESFilm(color.rgb);
@@ -27,10 +32,10 @@ void main() {
     // Subtle vignette
     vec2 pos = texcoord - 0.5;
     float dist = length(pos);
-    color.rgb *= smoothstep(0.8, 0.2, dist);
+    color.rgb *= smoothstep(1.0, 0.3, dist); // softer vignette
     
-    // Subtle contrast curve
-    color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), 0.2);
+    // Contrast pop
+    color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), 0.15);
     
     gl_FragColor = vec4(color.rgb, 1.0);
 }
