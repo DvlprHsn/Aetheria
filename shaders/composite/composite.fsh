@@ -127,10 +127,10 @@ float intersectPlane(vec3 rayOrigin, vec3 rayDir, float height) {
     return t;
 }
 
-// Raymarching volumetric 3D clouds
+    // Raymarching volumetric 3D clouds
 vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     float cloudMinHeight = 150.0;
-    float cloudMaxHeight = 250.0;
+    float cloudMaxHeight = 300.0;
     float cloudThickness = cloudMaxHeight - cloudMinHeight;
     
     // Intersect with cloud layer
@@ -148,11 +148,11 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     
     if (tMin > maxDist) return vec4(0.0);
     tMax = min(tMax, maxDist);
-    tMax = min(tMax, tMin + 2500.0); // Limit maximum draw distance for clouds
+    tMax = min(tMax, tMin + 3000.0); // Limit maximum draw distance for clouds
     if (tMax < tMin) return vec4(0.0);
     
     float t = tMin;
-    float stepSize = (tMax - tMin) / 48.0; // 48 steps for better 3D volume
+    float stepSize = (tMax - tMin) / 80.0; // 80 steps for perfect 3D volume clarity
     
     // Dithering to hide banding
     vec2 coord = gl_FragCoord.xy;
@@ -166,27 +166,27 @@ vec4 renderClouds(vec3 rayOrigin, vec3 rayDir, vec3 sunDir, float maxDist) {
     float cosTheta = dot(rayDir, lightDir);
     
     // Dual Henyey-Greenstein phase for forward and backward scattering
-    float phase = mix(phaseHenyeyGreenstein(cosTheta, 0.6), phaseHenyeyGreenstein(cosTheta, -0.3), 0.3);
+    float phase = mix(phaseHenyeyGreenstein(cosTheta, 0.7), phaseHenyeyGreenstein(cosTheta, -0.4), 0.3);
     
-    for(int i = 0; i < 48; i++) {
+    for(int i = 0; i < 80; i++) {
         if (t >= tMax || sum.a >= 0.99) break;
         
         vec3 p = rayOrigin + rayDir * t;
         
         // Foamy noise sampling
-        vec3 samplePos = p * 0.004; // natural scale
-        samplePos.x += frameTimeCounter * 0.1; // wind
+        vec3 samplePos = p * 0.005; // perfect natural scale
+        samplePos.x += frameTimeCounter * 0.15; // wind
         
         // Calculate structural noise
         float n = fbm(samplePos);
-        float fineNoise = fbm(samplePos * 3.0);
-        n -= fineNoise * 0.15; // erode edges
+        float fineNoise = fbm(samplePos * 4.0);
+        n -= fineNoise * 0.2; // clear eroded edges, no blur
         
         // Macro coverage for clustered natural clouds that don't cover the whole sky
         vec3 covPos = p * 0.001;
-        covPos.z -= frameTimeCounter * 0.05;
+        covPos.z -= frameTimeCounter * 0.08;
         float coverage = fbm(covPos);
-        coverage = smoothstep(0.35, 0.65, coverage);
+        coverage = smoothstep(0.4, 0.7, coverage);
         
         // Height gradient (sharp, flat bottoms, sweeping wispy tops)
         float heightFrac = (p.y - cloudMinHeight) / cloudThickness;
@@ -264,8 +264,12 @@ void main() {
     float depth = texture2D(depthtex0, texcoord).r;
     
     vec3 rayDir = getViewDir(texcoord);
-    vec3 sunDir = normalize(sunPosition);
-    vec3 rayOrigin = cameraPosition;
+    
+    // OptiFine sunPosition is in View Space. We MUST convert it to World Space!
+    vec3 sunDir = normalize((gbufferModelViewInverse * vec4(sunPosition, 0.0)).xyz);
+    
+    // Prevent floating point precision loss at far coordinates which causes blurriness/blockiness
+    vec3 rayOrigin = mod(cameraPosition, 100000.0);
     
     // Background sky color
     vec3 skyColor = getSkyColor(rayDir, sunDir);
